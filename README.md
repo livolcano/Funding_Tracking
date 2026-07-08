@@ -31,7 +31,7 @@ Given researcher or keyword input, the tool can:
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.14+
 - Internet access (for KAKEN + exchange-rate API)
 
 Dependencies are listed in `requirements.txt` and `pyproject.toml`.
@@ -43,7 +43,7 @@ Dependencies are listed in `requirements.txt` and `pyproject.toml`.
 3. Run one of the following modes.
 
 ```bash
-python -m venv .venv
+python3.14 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
