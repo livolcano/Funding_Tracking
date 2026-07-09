@@ -9,6 +9,7 @@ from tkinter import filedialog, messagebox, ttk
 from openpyxl import Workbook
 
 from main import (
+    parse_budget_total_jpy,
     process_keyword_queries,
     process_researchers,
     save_to_sqlite,
@@ -36,6 +37,7 @@ class App:
         self.output_sqlite_var = tk.StringVar(value="output/kaken_latest_projects.db")
         self.project_list_excel_var = tk.StringVar(value="output/kaken_project_list.xlsx")
         self.project_started_after_year_var = tk.StringVar(value="")
+        self.project_top_n_per_keyword_var = tk.StringVar(value=str(DEFAULT_TOP_N_PER_KEYWORD))
         self.project_only_not_completed_var = tk.BooleanVar(value=False)
         self.status_var = tk.StringVar(value="Select a mode to begin.")
 
@@ -72,7 +74,7 @@ class App:
         ).grid(row=0, column=0, sticky=tk.W)
         self.keyword_text = tk.Text(self.step2_project_frame, height=6, wrap=tk.WORD)
         self.keyword_text.grid(row=1, column=0, sticky=tk.EW, pady=(6, 0))
-        self.keyword_text.insert("1.0", "terahertz\n")
+        self.keyword_text.insert("1.0", "6G\n")
 
         project_filter_frame = ttk.Frame(self.step2_project_frame)
         project_filter_frame.grid(row=2, column=0, sticky=tk.EW, pady=(8, 0))
@@ -89,6 +91,13 @@ class App:
         )
         ttk.Entry(project_filter_frame, textvariable=self.project_started_after_year_var).grid(
             row=1, column=1, sticky=tk.EW, padx=(8, 0), pady=(8, 0)
+        )
+
+        ttk.Label(project_filter_frame, text="Max results per keyword (1-200)").grid(
+            row=2, column=0, sticky=tk.W, pady=(8, 0)
+        )
+        ttk.Entry(project_filter_frame, textvariable=self.project_top_n_per_keyword_var).grid(
+            row=2, column=1, sticky=tk.EW, padx=(8, 0), pady=(8, 0)
         )
 
         ttk.Button(self.step2_project_frame, text="Continue", command=self._complete_step2_project).grid(
@@ -262,12 +271,23 @@ class App:
         if not keywords:
             messagebox.showwarning("Warning", "Please enter at least one keyword.")
             return
+        top_n_raw = self.project_top_n_per_keyword_var.get().strip()
+        try:
+            top_n = int(top_n_raw)
+        except ValueError:
+            messagebox.showwarning("Warning", "Max results per keyword must be an integer.")
+            return
+        if top_n < 1 or top_n > 200:
+            messagebox.showwarning("Warning", "Max results per keyword must be between 1 and 200.")
+            return
+
         started_after_year_raw = self.project_started_after_year_var.get().strip()
         if started_after_year_raw:
             try:
                 int(started_after_year_raw)
-            except ValueError as exc:
-                raise ValueError("Project start year must be an integer.") from exc
+            except ValueError:
+                messagebox.showwarning("Warning", "Project start year must be an integer.")
+                return
 
         self.step3_project_output_frame.pack_forget()
         self.step3_project_output_frame.pack(fill=tk.X, pady=(12, 0))
@@ -359,12 +379,14 @@ class App:
 
                 started_after_year_raw = self.project_started_after_year_var.get().strip()
                 started_after_year = int(started_after_year_raw) if started_after_year_raw else None
+                top_n_raw = self.project_top_n_per_keyword_var.get().strip()
+                top_n_per_keyword = int(top_n_raw)
 
                 records = process_keyword_queries(
                     keyword_queries=keyword_queries,
                     page_size=DEFAULT_PAGE_SIZE,
                     max_pages=DEFAULT_MAX_PAGES,
-                    top_n_per_keyword=DEFAULT_TOP_N_PER_KEYWORD,
+                    top_n_per_keyword=top_n_per_keyword,
                     only_not_completed=self.project_only_not_completed_var.get(),
                     started_after_year=started_after_year,
                     verify_ssl=False,
@@ -373,8 +395,26 @@ class App:
 
                 output_excel = Path(self.project_list_excel_var.get().strip())
                 write_project_list_excel(records, output_excel)
+
+                total_budget_jpy = 0
+                total_budget_usd = 0.0
+                for record in records:
+                    budget_jpy = parse_budget_total_jpy(str(record.get("budget_total", "")))
+                    if budget_jpy is not None:
+                        total_budget_jpy += budget_jpy
+                    budget_usd_raw = str(record.get("budget_total_usd", "")).strip()
+                    if budget_usd_raw:
+                        try:
+                            total_budget_usd += float(budget_usd_raw)
+                        except ValueError:
+                            pass
+
                 self._set_status(
-                    f"Completed successfully. Project list saved to {output_excel}. Total projects: {len(records)}"
+                    "Completed successfully. "
+                    f"Project list saved to {output_excel}. "
+                    f"Total projects: {len(records)}; "
+                    f"Total budget JPY: {total_budget_jpy:,}; "
+                    f"Total budget USD: {total_budget_usd:,.2f}"
                 )
                 self._show_completion_actions()
                 return

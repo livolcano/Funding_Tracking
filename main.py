@@ -166,9 +166,13 @@ def fetch_keyword_project_list(
     only_not_completed: bool,
     started_after_year: int | None,
     top_n: int,
+    jpy_to_usd_rate: float,
 ) -> list[dict[str, Any]]:
+    if top_n < 1 or top_n > 200:
+        raise ValueError("top_n must be between 1 and 200.")
+
     candidates = fetch_search_candidates(client, keyword_query, page_size=page_size, max_pages=max_pages)
-    filtered: list[dict[str, Any]] = []
+    filtered_candidates: list[SearchCandidate] = []
     seen_project_ids: set[str] = set()
     for candidate in candidates:
         if candidate.project_id in seen_project_ids:
@@ -186,29 +190,47 @@ def fetch_keyword_project_list(
             if project_start_year is None or project_start_year <= started_after_year:
                 continue
 
-        filtered.append(
+        filtered_candidates.append(candidate)
+
+    filtered_candidates.sort(
+        key=lambda candidate: (
+            parse_date_range(candidate.project_period_text)[0] or "0000-00-00",
+            candidate.project_id,
+        ),
+        reverse=True,
+    )
+
+    records: list[dict[str, Any]] = []
+    for candidate in filtered_candidates[:top_n]:
+        project_start, project_end = parse_date_range(candidate.project_period_text)
+        detail = parse_detail_project_info(client, candidate.detail_url)
+        budget_total = detail["budget_total"]
+        budget_total_jpy = parse_budget_total_jpy(budget_total)
+        budget_total_usd = ""
+        if budget_total_jpy is not None:
+            budget_total_usd = f"{budget_total_jpy * jpy_to_usd_rate:.2f}"
+
+        project_title_en = detail["project_title"] or candidate.project_title
+        project_pi_name_en = candidate.pi_name
+        records.append(
             {
                 "search_keyword": keyword_query,
                 "project_id": candidate.project_id,
-                "project_title": candidate.project_title,
+                "project_title": project_title_en,
+                "project_title_en": project_title_en,
                 "project_status": candidate.project_status,
                 "project_start": project_start or "",
                 "project_end": project_end or "",
                 "project_pi_name": candidate.pi_name,
+                "project_pi_name_en": project_pi_name_en,
                 "project_institution": candidate.institution,
                 "project_period_text": candidate.project_period_text,
+                "budget_total": budget_total,
+                "budget_total_usd": budget_total_usd,
                 "detail_url": candidate.detail_url,
             }
         )
-
-    filtered.sort(
-        key=lambda item: (
-            item["project_start"] or "0000-00-00",
-            item["project_id"],
-        ),
-        reverse=True,
-    )
-    return filtered[:top_n]
+    return records
 
 
 def parse_search_candidates(soup: BeautifulSoup) -> list[SearchCandidate]:
@@ -522,12 +544,16 @@ def write_project_list_excel(records: list[dict[str, Any]], output_excel: Path) 
                 "search_keyword",
                 "project_id",
                 "project_title",
+                "project_title_en",
                 "project_status",
                 "project_start",
                 "project_end",
                 "project_pi_name",
+                "project_pi_name_en",
                 "project_institution",
                 "project_period_text",
+                "budget_total",
+                "budget_total_usd",
                 "detail_url",
             ]
         )
@@ -549,6 +575,9 @@ def process_keyword_queries(
     verify_ssl: bool,
     ca_bundle: str | None,
 ) -> list[dict[str, Any]]:
+    if top_n_per_keyword < 1 or top_n_per_keyword > 200:
+        raise ValueError("project-top-n-per-keyword must be between 1 and 200.")
+
     verify_config: bool | str = verify_ssl
     if ca_bundle:
         verify_config = ca_bundle
@@ -560,6 +589,8 @@ def process_keyword_queries(
         follow_redirects=True,
         verify=verify_config,
     ) as client:
+        jpy_to_usd_rate = fetch_latest_jpy_to_usd_rate(client)
+        logging.info("Using JPY->USD rate: %.6f", jpy_to_usd_rate)
         for keyword_query in keyword_queries:
             cleaned_keyword = normalize_text(keyword_query)
             if not cleaned_keyword:
@@ -573,6 +604,7 @@ def process_keyword_queries(
                 only_not_completed=only_not_completed,
                 started_after_year=started_after_year,
                 top_n=top_n_per_keyword,
+                jpy_to_usd_rate=jpy_to_usd_rate,
             )
             all_records.extend(records)
     return all_records
